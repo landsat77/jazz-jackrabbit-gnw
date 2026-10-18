@@ -1,5 +1,9 @@
 # Jazz Jackrabbit for Game & Watch Retro-Go SD
 
+<img width="2880" height="2160" alt="image" src="https://github.com/user-attachments/assets/95700eb6-96dc-4474-b2d4-4574dfe4e283" />
+
+
+
 Epic MegaGames' **Jazz Jackrabbit** (1994), PC DOS version, running on the
 Nintendo Game & Watch with the
 [Retro-Go SD](https://github.com/sylverb/game-and-watch-retro-go-sd) firmware,
