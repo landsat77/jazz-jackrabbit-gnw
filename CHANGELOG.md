@@ -7,6 +7,19 @@ section as the GitHub Release notes.
 
 ## [Unreleased]
 
+## [v1.0.2] - 2026-10-18
+
+### Fixed
+
+- Choppy sound on the console: the audio is now fed by the firmware's
+  interrupt from a ring the game fills about 93 ms ahead (Retro-Go SD PCM
+  ring), so frames longer than a DMA half buffer no longer break it.
+
+### Added
+
+- The first minute of statistics (frames per second, longest frame, audio
+  underruns) is written to `/data/jazz/<name>/log.txt` on the SD card.
+
 ## [v1.0.1] - 2026-10-18
 
 ### Fixed

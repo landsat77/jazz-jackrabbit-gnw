@@ -36,11 +36,12 @@
 #include "gw_core_bridge.h" /* last: rewrites ACTIVE_FILE, common_emu_state, dma_counter */
 
 #define JJ_SAMPLE_RATE         22050
-/* ~46 ms per DMA half buffer: the game fills it between two frames (one
- * frame is 16.7 ms at 60 fps, longer when the CPU is busy): a half buffer
- * as long as a frame was sometimes missed, then played again (stale
- * samples: the sound was garbled). */
-#define JJ_AUDIO_BUFFER_LENGTH 1024
+/* Audio: the firmware's interrupt fills each DMA half buffer (16.7 ms)
+ * from a ring the game fills ahead (JJ_RING_AHEAD samples, ~93 ms): the
+ * sound does not depend on when the game gets to it. */
+#define JJ_AUDIO_BUFFER_LENGTH 368
+#define JJ_RING_SIZE  4096   /* power of 2 */
+#define JJ_RING_AHEAD 2048
 #define JJ_TICK_MS             16       /* buttons / menu / overlay rate */
 
 static odroid_gamepad_state_t joystick;
@@ -62,8 +63,11 @@ static int in_service;
 
 /* statistics (log every 5 s): frames, idle time (DWT cycle counter) */
 #define DWT_CYCCNT (*(volatile uint32_t *)0xE0001004)
-static uint32_t stat_frames, stat_t0, stat_audio_missed;
+static uint32_t stat_frames, stat_t0, stat_audio_missed, stat_max_frame_ms;
 static void feed_audio(void);
+static FILE *stat_log;
+static int stat_log_lines;
+static void ring_stop(void);
 static uint64_t stat_idle_cycles;
 
 static char save_dir[160];
@@ -135,6 +139,7 @@ static void show_error(const char *msg, const char *detail);
 
 void jj_plat_fatal(const char *msg)
 {
+    ring_stop();
     audio_stop_playing();
     show_error("Jazz Jackrabbit error:", msg);
     while (1)
@@ -144,6 +149,7 @@ void jj_plat_fatal(const char *msg)
 void jj_plat_quit(void)
 {
     printf("jj: game quit\n");
+    ring_stop();
     audio_stop_playing();
     odroid_system_switch_app(0);
     while (1)
@@ -189,18 +195,33 @@ void jj_plat_present(const uint8_t *pixels, int w, int h, int pitch,
     convert_canvas(fb);
     common_ingame_overlay();
     lcd_swap();
+    uint32_t now = get_elapsed_time();
+    if (have_frame && now - last_present_ms > stat_max_frame_ms && now - last_present_ms < 1000)
+        stat_max_frame_ms = now - last_present_ms;
     have_frame = true;
-    last_present_ms = get_elapsed_time();
+    last_present_ms = now;
     stat_frames++;
     if (last_present_ms - stat_t0 >= 5000) {
         uint32_t ms = last_present_ms - stat_t0;
         /* 280 MHz */
         uint32_t idle_ms = (uint32_t)(stat_idle_cycles / 280000u);
-        printf("jj: %lu.%lu fps, idle %lu%%, heap %u / peak %u, audio missed %lu\n",
+        char line[160];
+        snprintf(line, sizeof(line), "jj: %lu.%lu fps, longest frame %lu ms, idle %lu%%, heap %u / peak %u, audio underrun %lu samples\n",
                (unsigned long)(stat_frames * 1000 / ms), (unsigned long)((stat_frames * 10000 / ms) % 10),
+               (unsigned long)stat_max_frame_ms,
                (unsigned long)(idle_ms * 100 / ms), (unsigned)jj_heap_used(), (unsigned)jj_heap_peak(),
                (unsigned long)stat_audio_missed);
+        printf("%s", line);
+        /* the first minute in a file of the save folder (diagnostics) */
+        if (stat_log && stat_log_lines < 12) {
+            fputs(line, stat_log);
+            if (++stat_log_lines == 12) {
+                fclose(stat_log);
+                stat_log = NULL;
+            }
+        }
         stat_audio_missed = 0;
+        stat_max_frame_ms = 0;
         stat_frames = 0;
         stat_idle_cycles = 0;
         stat_t0 = last_present_ms;
@@ -229,24 +250,58 @@ static void *screenshot(void)
 /* ------------------------------------------------------------------ */
 /* Audio                                                              */
 /* ------------------------------------------------------------------ */
+static int16_t ring[JJ_RING_SIZE];
+static volatile uint16_t ring_head, ring_tail; /* written / read (interrupt) */
+static uint32_t ring_written;                  /* samples written in all */
+static bool ring_on;
+
+static void ring_start(void)
+{
+    ring_head = ring_tail = 0;
+    ring_written = 0;
+    pcm_attach(ring, JJ_RING_SIZE, &ring_head, &ring_tail);
+    pcm_audio_setpos(0);
+    pcm_audio_set(common_emu_sound_get_volume(), 1);
+    pcm_audio_enable(1);
+    ring_on = true;
+}
+
+static void ring_stop(void)
+{
+    if (ring_on)
+        pcm_audio_enable(0);
+    ring_on = false;
+}
+
+/* tops the ring up to JJ_RING_AHEAD samples ahead of the interrupt */
 static void feed_audio(void)
 {
-    if (dma_counter == last_dma_counter)
+    if (!ring_on)
         return;
-    if (dma_counter - last_dma_counter > 1)
-        stat_audio_missed += dma_counter - last_dma_counter - 1;
-    last_dma_counter = dma_counter;
-    int16_t *buf = audio_get_active_buffer();
-    uint16_t len = audio_get_buffer_length();
-    /* always render: keeps the music and the sounds moving */
-    jj_core_audio_render(buf, len);
-    if (common_emu_sound_loop_is_muted()) {
-        audio_clear_active_buffer();
-        return;
+    /* the interrupt played silence when the ring was empty */
+    uint32_t played = pcm_audio_pos();
+    if ((int32_t)(played - ring_written) > 0) {
+        stat_audio_missed += played - ring_written;
+        ring_written = played;
     }
-    int32_t factor = common_emu_sound_get_volume();
-    for (int i = 0; i < len; i++)
-        buf[i] = (int16_t)(((int32_t)buf[i] * factor) >> 8);
+    bool muted = common_emu_sound_loop_is_muted();
+    pcm_audio_set(common_emu_sound_get_volume(), muted ? 0 : 1);
+    uint16_t tail = ring_tail;
+    int level = (ring_head - tail) & (JJ_RING_SIZE - 1);
+    int want = JJ_RING_AHEAD - level;
+    while (want > 0) {
+        int head = ring_head;
+        int n = want;
+        if (n > JJ_RING_SIZE - head)
+            n = JJ_RING_SIZE - head; /* up to the end of the ring */
+        if (n > 512)
+            n = 512;
+        /* always render: keeps the music and the sounds moving */
+        jj_core_audio_render(ring + head, n);
+        ring_head = (uint16_t)((head + n) & (JJ_RING_SIZE - 1));
+        ring_written += n;
+        want -= n;
+    }
 }
 
 /* ------------------------------------------------------------------ */
@@ -523,6 +578,12 @@ void app_main(uint8_t load_state, uint8_t start_paused, int8_t save_slot)
     lcd_clear_buffers();
     audio_start_playing(JJ_AUDIO_BUFFER_LENGTH);
     last_dma_counter = dma_counter;
+    ring_start();
+    {
+        char path[220];
+        snprintf(path, sizeof(path), "%s/log.txt", save_dir);
+        stat_log = fopen(path, "w");
+    }
     last_tick_ms = get_elapsed_time();
 
     setup_game_options();
