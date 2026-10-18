@@ -7,6 +7,15 @@ section as the GitHub Release notes.
 
 ## [Unreleased]
 
+## [v1.0.1] - 2026-10-18
+
+### Fixed
+
+- Sound too quiet / garbled on the console: the audio half buffer is 46 ms
+  instead of 16.7 ms (one frame: a frame a little longer than that left a
+  half buffer unfilled, played again), and the music and the sound effects
+  are twice as loud (the game's default volumes are half of the maximum).
+
 ## [v1.0.0] - 2026-10-18
 
 ### Added

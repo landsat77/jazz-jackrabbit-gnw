@@ -77,18 +77,23 @@ void jj_sound_render(int16_t *out, int frames)
 			if (done < frames && !jj_mus_rewind(mus))
 				break;
 		}
-		if (audible && musicVolume < MAX_VOLUME) {
-			// music rendered at full volume (xmp volume 100 = default)
-			for (int i = 0; i < frames; i++)
-				out[i] = (int16_t)(out[i] * musicVolume / MAX_VOLUME);
+		if (audible) {
+			// music rendered at xmp volume 100; the game's default volume
+			// (50) is half of it: twice as loud on the small speaker
+			const int gain = musicVolume * 2 * 256 / MAX_VOLUME;
+			for (int i = 0; i < frames; i++) {
+				int v = (out[i] * gain) >> 8;
+				out[i] = (int16_t)(v > 32767 ? 32767 : v < -32768 ? -32768 : v);
+			}
 		}
 	}
 
 	if (!soundsLoaded || !soundEnabled)
 		return;
 
-	// 8 bit clips: x 256, then the volume (SDL: volume * 128 / 100 of 128)
-	const int vol = soundVolume * 256 / MAX_VOLUME;
+	// 8 bit clips: x 256, then the volume (SDL: volume * 128 / 100 of 128),
+	// twice as loud like the music
+	const int vol = soundVolume * 2 * 256 / MAX_VOLUME;
 	for (int i = SE::NONE + 1; i < SE::MAX; i++) {
 		Sound &s = sounds[i];
 		if (!s.data || s.position < 0)

@@ -36,7 +36,11 @@
 #include "gw_core_bridge.h" /* last: rewrites ACTIVE_FILE, common_emu_state, dma_counter */
 
 #define JJ_SAMPLE_RATE         22050
-#define JJ_AUDIO_BUFFER_LENGTH 368      /* ~16.7 ms per DMA half buffer */
+/* ~46 ms per DMA half buffer: the game fills it between two frames (one
+ * frame is 16.7 ms at 60 fps, longer when the CPU is busy): a half buffer
+ * as long as a frame was sometimes missed, then played again (stale
+ * samples: the sound was garbled). */
+#define JJ_AUDIO_BUFFER_LENGTH 1024
 #define JJ_TICK_MS             16       /* buttons / menu / overlay rate */
 
 static odroid_gamepad_state_t joystick;
@@ -58,7 +62,8 @@ static int in_service;
 
 /* statistics (log every 5 s): frames, idle time (DWT cycle counter) */
 #define DWT_CYCCNT (*(volatile uint32_t *)0xE0001004)
-static uint32_t stat_frames, stat_t0;
+static uint32_t stat_frames, stat_t0, stat_audio_missed;
+static void feed_audio(void);
 static uint64_t stat_idle_cycles;
 
 static char save_dir[160];
@@ -178,6 +183,7 @@ void jj_plat_present(const uint8_t *pixels, int w, int h, int pitch,
     canvas_pitch = pitch;
     canvas_palette = palette;
     canvas_pal_version = pal_version;
+    feed_audio();
     lcd_sleep_while_swap_pending();
     uint16_t *fb = lcd_get_active_buffer();
     convert_canvas(fb);
@@ -190,9 +196,11 @@ void jj_plat_present(const uint8_t *pixels, int w, int h, int pitch,
         uint32_t ms = last_present_ms - stat_t0;
         /* 280 MHz */
         uint32_t idle_ms = (uint32_t)(stat_idle_cycles / 280000u);
-        printf("jj: %lu.%lu fps, idle %lu%%, heap %u / peak %u\n",
+        printf("jj: %lu.%lu fps, idle %lu%%, heap %u / peak %u, audio missed %lu\n",
                (unsigned long)(stat_frames * 1000 / ms), (unsigned long)((stat_frames * 10000 / ms) % 10),
-               (unsigned long)(idle_ms * 100 / ms), (unsigned)jj_heap_used(), (unsigned)jj_heap_peak());
+               (unsigned long)(idle_ms * 100 / ms), (unsigned)jj_heap_used(), (unsigned)jj_heap_peak(),
+               (unsigned long)stat_audio_missed);
+        stat_audio_missed = 0;
         stat_frames = 0;
         stat_idle_cycles = 0;
         stat_t0 = last_present_ms;
@@ -225,6 +233,8 @@ static void feed_audio(void)
 {
     if (dma_counter == last_dma_counter)
         return;
+    if (dma_counter - last_dma_counter > 1)
+        stat_audio_missed += dma_counter - last_dma_counter - 1;
     last_dma_counter = dma_counter;
     int16_t *buf = audio_get_active_buffer();
     uint16_t len = audio_get_buffer_length();
