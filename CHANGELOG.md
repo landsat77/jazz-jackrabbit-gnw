@@ -1,0 +1,24 @@
+# Changelog
+
+This file follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and
+[Semantic Versioning](https://semver.org/spec/v2.0.0.html). Release tags must
+match a section heading exactly (for example `v1.0.0`): CI uses the matching
+section as the GitHub Release notes.
+
+## [Unreleased]
+
+## [v1.0.0] - 2026-10-18
+
+### Added
+
+- Jazz Jackrabbit 1 (PC DOS: full game, shareware, Holiday Hare) as a
+  Retro-Go SD GWHB homebrew, built on OpenJazz and the retro-go-sd-templates
+  SDK (firmware ABI v2, Retro-Go SD v2.0.0-rc1 or later), on a small SDL 1.2
+  written for the console.
+- Game data from a `.jj` pack next to the `.bin`, used in place from the
+  external flash (`tools/jj_pack.py`), with every picture pre-decoded and the
+  music pre-rendered on the PC (`jj_render` for Windows, macOS and Linux).
+- Savestates (level, checkpoint, score, lives, ammo), resume from the
+  launcher.
+- Pause menu options: music, sound effects, swap A/B.
+- 320x240 picture (the whole screen), 60 frames per second.
