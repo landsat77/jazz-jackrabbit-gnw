@@ -7,6 +7,23 @@ section as the GitHub Release notes.
 
 ## [Unreleased]
 
+## [v1.0.6] - 2026-11-06
+
+Contributions from sunglassesandapplejuice (pull requests #1 and #2).
+
+### Fixed
+
+- Out of memory when finishing a level with the gem (bonus level) and when
+  the planet intro followed the bonus level: the current level is now freed
+  before the next one is loaded (#2).
+- Music: the 4th channel of the songs was ignored (Diamondus, for example,
+  changes a lot after 9 s). The loop detection threshold is now 100 (#1).
+  **The pack must be made again** (`jj_pack.py`) to get the new music.
+
+### Added
+
+- `tools/mus2wav.py` to listen to the songs rendered in a pack (#1).
+
 ## [v1.0.3] - 2026-10-19
 
 ### Added
